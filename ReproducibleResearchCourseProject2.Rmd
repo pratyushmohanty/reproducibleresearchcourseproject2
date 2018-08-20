@@ -1,0 +1,226 @@
+---
+title: "Data Exploration of the NOAA Storm Database (Course Project 2)"
+author: "Pratyush Mohanty"
+date: "20 August 2018"
+output: html_document
+---
+
+## Synopsis
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage. The impact of the different event types on health and property has been analysed below. It clearly shows that Tornadoes, Floods, Excessive Heat and Storm Winds can wreak havoc on both the people and the economy.
+
+## Data Processing
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Download and unzip the raw data.
+
+```{r Download_NOAA_Storm_db, cache=TRUE}
+## Download
+urlNOAADatabase <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+download.file(urlNOAADatabase, "NOAADatabase.csv.bz2")
+downloadDate <- date()
+paste("Data downloaded from \n", urlNOAADatabase, "\n on: ", downloadDate, sep = "")
+
+## unzip the file
+data_raw <- read.csv("NOAADatabase.csv.bz2", stringsAsFactors = FALSE)
+
+## peek into the data
+str(data_raw)
+head(data_raw, n = 5)
+
+
+```
+
+## Analysis
+
+First, let's have a look at the dataset.
+
+#### Are there any missing values?
+
+```{r check_missing_values}
+dim(data_raw)
+numOfvaluesMissing <- nrow(is.na(data_raw))
+percentageMissing <- mean(is.na(data_raw))*100
+
+paste("There are", format(numOfvaluesMissing, big.mark=","), "(=", 
+      format(round(percentageMissing, 2), big.mark=","),
+      "%) missing values.", sep = " ")
+
+```
+
+#### What are the different event types?
+
+```{r different_events, }
+events <- unique(data_raw$EVTYPE)
+paste("There are", nrow(events), "types of events recorded. Few examples below.", sep = " ")
+
+head(events, 10)
+
+```
+
+#### What is the date range covered by the dataset?
+
+```{r date_range}
+## convert the BGN_DATE column to date
+data_raw$BGN_DATE <- as.Date(data_raw$BGN_DATE, format = "%m/%d/%Y %H:%M:%S")
+minDate <- min(data_raw$BGN_DATE, na.rm = TRUE)
+maxDate <- max(data_raw$BGN_DATE, na.rm = TRUE)
+
+paste("The data set ranges from", as.character(minDate), "to",
+      as.character(maxDate), ".", sep = " ")
+
+```
+
+
+To analyse the data, we'll look at the below questions.   
+The questions center around the various event types and their impact to health and economy of the United States.
+
+### Across the United States, which types of events (as indicated in the *EVTYPE* variable) are most harmful with respect to population health?
+
+To answer this, we will group the data by event type, and look at the total number of fatalities and injuries.
+The top 10 cases are depicted below.
+
+```{r load_dplyr, message=FALSE}
+if (!require("dplyr")) 
+        install.packages("dplyr", quiet = TRUE)
+library(dplyr)
+```
+
+```{r grp_by_eventType}
+data_health_impact <- 
+        as.data.frame(
+                data_raw %>%
+                group_by(EVTYPE) %>%
+                summarise(totalFatalities = sum(FATALITIES), 
+                          totalInjuries = sum(INJURIES))
+        )
+
+## keep only rows where either fatalities or injuries is non zero
+
+data_health_impact<- data_health_impact[
+        data_health_impact$totalFatalities != 0 |
+                data_health_impact$totalInjuries !=0, ]
+
+data_health_impact$EVTYPE <- as.factor(data_health_impact$EVTYPE)
+
+## take the top 10 causes for fatalities
+
+data_top10_events_for_fatalities <-
+        head(
+                data_health_impact[
+                        order(data_health_impact$totalFatalities, decreasing = TRUE), ], 
+                n=10)
+
+data_top10_events_for_fatalities
+
+data_top10_events_for_injuries <-
+        head(
+                data_health_impact[
+                        order(data_health_impact$totalInjuries, decreasing = TRUE), ], 
+                n=10)
+
+data_top10_events_for_injuries
+
+```
+
+```{r load_ggplot2_gridExtra, message=FALSE}
+if (!require("ggplot2")) 
+        install.packages("ggplot2", quiet = TRUE)
+library(ggplot2)
+
+if (!require("gridExtra")) 
+        install.packages("gridExtra", quiet = TRUE)
+library(gridExtra)
+
+```
+
+```{r plot_health_impact_by_event_type}
+
+ggplot(data = data_top10_events_for_fatalities, 
+       aes(x=reorder(EVTYPE, totalFatalities), y=totalFatalities)) +
+geom_bar(stat="identity", fill = "red") +
+coord_flip() +
+ggtitle("Top 10 event types for Fatalities") +
+labs(x="Event Type", y="Total Fatalities")
+
+
+ggplot(data = data_top10_events_for_injuries, 
+       aes(x=reorder(EVTYPE, totalInjuries), y=totalInjuries)) +
+geom_bar(stat="identity", fill = "red") +
+coord_flip() +
+ggtitle("Top 10 event types for Injuries") +
+labs(x="Event Type", y="Total Injuries")
+
+```
+
+### Across the United States, which types of events have the greatest economic consequences?
+
+To assess the economic impact, we will take total of the Crop Damage(CROPDMG) and Property Damage(PROPDMG).
+
+The below is mentioned in the data documentation (pg12) -  
+"*Alphabetical characters used to signify magnitude include "K" for thousands, "M" for millions, and "B" for billions. *"
+
+This analysis will only conside the above 3 characters - K, M, B
+
+```{r calculate_total_damage_by_event_type}
+
+## create a function for the multiplier
+computeAmount <- function(x, y) {
+        if(y=="K" | y=='k') {
+                x*1000
+        }
+        else if(y=="M" | y=='m') {
+                x*1000000
+        }
+        else if(y=="B") {
+                x*1000000000 
+        }
+        else {
+                0
+        }
+}
+
+## add a column for calculated crop damage
+data_raw$CalculatedCropDamage<- mapply(computeAmount, data_raw$CROPDMG, data_raw$CROPDMGEXP)
+
+## add a column for calculated property damage
+data_raw$CalculatedPropertyDamage<- mapply(computeAmount, data_raw$PROPDMG, data_raw$PROPDMGEXP)
+
+## calculate total damage by each event type        
+
+data_damage <-
+        as.data.frame(
+                data_raw %>%
+                        group_by(EVTYPE) %>%
+                        summarise(totalDamage = sum(CalculatedCropDamage + CalculatedPropertyDamage))
+        )
+
+## keep only rows where total damage is non zero
+data_damage <- data_damage[data_damage$totalDamage!=0, ]
+
+## Look at the top 10
+data_top10_events_for_damages <-
+        head(data_damage[order(data_damage$totalDamage, decreasing = TRUE), ], n=10)
+
+data_top10_events_for_damages
+
+```
+
+```{r plot_totalDamage}
+ggplot(data = data_top10_events_for_damages, 
+               aes(x=reorder(EVTYPE, totalDamage), y=totalDamage/1000000000)) +
+        geom_bar(stat="identity", fill = "red") +
+        coord_flip() +
+        ggtitle("Top 10 event types for damages") +
+        labs(x="Event Type", y="Total Cost (in Billions)")
+```
+
+## Results
+
+The analysis shows that the top causes for deaths are Tornadoes and Excessive Heat.
+They also account for most injuries along with Storm winds.
+
+However, Floods cause the biggest economic impact by destroying crops and property.
